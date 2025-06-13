@@ -138,7 +138,7 @@ impl Ppk2 {
     /// - [Ppk2<Measuring>],
     /// - [Receiver] of [measurement::MeasurementMatch], and
     /// - A closure that can be called to stop the measurement parsing pipeline and return the
-    /// device.
+    ///   device.
     pub fn start_measurement(
         self,
         sps: usize,
@@ -150,7 +150,7 @@ impl Ppk2 {
     /// - [Ppk2<Measuring>],
     /// - [Receiver] of [measurement::Result], and
     /// - A closure that can be called to stop the measurement parsing pipeline and return the
-    /// device.
+    ///   device.
     pub fn start_measurement_matching(
         mut self,
         pins: LogicPortPins,

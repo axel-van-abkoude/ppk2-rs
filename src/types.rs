@@ -171,13 +171,13 @@ impl Level {
 
     /// Check whether the [Level] matches another.
     pub fn matches(&self, other: Level) -> bool {
-        match (self, other) {
-            (_, Level::Either) => true,
-            (Level::Either, _) => true,
-            (Level::Low, Level::Low) => true,
-            (Level::High, Level::High) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (_, Level::Either)
+                | (Level::Either, _)
+                | (Level::Low, Level::Low)
+                | (Level::High, Level::High)
+        )
     }
 }
 
@@ -451,6 +451,7 @@ mod tests {
 
     #[test]
     #[ignore = "assert_eq! doesn't work for floats, need to find another solution"]
+    #[allow(clippy::excessive_precision)]
     pub fn get_adc_result() {
         let raw_metadata = r#"Calibrated: 0
 R0: 1003.3506

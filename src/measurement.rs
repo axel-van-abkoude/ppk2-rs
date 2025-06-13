@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use crate::{types::{LogicPortPins, Metadata}};
+use crate::types::{LogicPortPins, Metadata};
 
 const ADC_MULTIPLIER: f32 = 1.8 / 163840.;
 const SPIKE_FILTER_ALPHA: f32 = 0.18;
@@ -97,10 +97,7 @@ impl MeasurementAccumulator {
                 self.state.expected_counter.replace(counter);
             }
 
-            buf.push_back(Measurement {
-                micro_amps,
-                pins,
-            })
+            buf.push_back(Measurement { micro_amps, pins })
         }
         self.buf.drain(..end);
         samples_missed
@@ -164,7 +161,6 @@ fn get_adc_result(
     state.prev_range = Some(range);
     adc
 }
-
 
 /// Indicates whether a set of [Measurement]s matched
 #[derive(Debug)]
@@ -240,7 +236,7 @@ impl<I: Iterator<Item = Measurement>> MeasurementIterExt for I {
 }
 
 const fn generate_mask(bits: u32, pos: u32) -> u32 {
-    (2u32.pow(bits as u32) - 1) << pos
+    (2u32.pow(bits) - 1) << pos
 }
 
 macro_rules! masked_value {
@@ -264,6 +260,7 @@ mod tests {
     };
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     pub fn test_get_adc_result() {
         let raw_metadata = r#"Calibrated: 0
 R0: 1003.3506

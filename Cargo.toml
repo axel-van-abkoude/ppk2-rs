@@ -12,7 +12,9 @@ categories = ["embedded", "development-tools::profiling"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+csv = "1.4.0"
 num_enum = "0.7.3"
+serde = { version = "1.0", features = ["derive"] }
 serialport = "4.7.2"
 thiserror = "2.0.12"
 tracing = "0.1.41"

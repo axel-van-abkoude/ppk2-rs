@@ -4,6 +4,7 @@ use std::{fmt::Display, num::ParseIntError, str::FromStr};
 
 use crate::{Error, Result};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use serde::ser::{Serialize, Serializer};
 
 /// Error parsing one of the types defined by this crate.
 #[derive(Debug)]
@@ -158,6 +159,36 @@ impl From<bool> for Level {
     }
 }
 
+// Serializer for low data footprint
+// impl Serialize for LogicPortPins {
+//     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok,S::Error>
+//     where
+//         S: Serializer,
+//     {
+//         use Level::*;
+//         let mut ret:u8 = 0;
+//         for (i,pin) in self.pin_levels.iter().enumerate() {
+//             match pin {
+//                 Low     => {continue;       },
+//                 High    => {ret |= 1 << i;  },
+//                 // Display nothing when not sure which section we are in
+//                 Either  => {return serializer.serialize_none();},
+//             }
+//         }
+//         serializer.serialize_u8(ret)
+//     }
+// }
+
+// Serializer for clarity
+impl Serialize for LogicPortPins {
+     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok,S::Error>
+     where
+         S: Serializer,
+     {
+        serializer.serialize_str(&self.to_string())
+     }
+ }
+
 impl Level {
     /// Check whether the level is high.
     pub fn is_high(&self) -> bool {
@@ -238,6 +269,18 @@ impl From<u8> for LogicPortPins {
 impl From<u32> for LogicPortPins {
     fn from(v: u32) -> Self {
         (v as u8).into()
+    }
+}
+
+impl ToString for LogicPortPins {
+    fn to_string(&self) -> String {
+        use Level::*;
+        self.pin_levels.iter()
+            .map(|p| match p {
+                Low => '0',
+                High => '1',
+                Either => 'x',
+            }).collect()
     }
 }
 

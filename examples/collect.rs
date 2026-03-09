@@ -3,7 +3,7 @@ use clap::Parser;
 use ppk2::{
     measurement::MeasurementMatch,
     try_find_ppk2_port,
-    types::{DevicePower, MeasurementMode, SourceVoltage, LogicPortPins},
+    types::{DevicePower, LogicPortPins, MeasurementMode, SourceVoltage},
     Ppk2,
 };
 use std::{
@@ -13,7 +13,7 @@ use std::{
 use tracing::{debug, error, info, Level as LogLevel};
 use tracing_subscriber::FmtSubscriber;
 
-use serde::{Serialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Parser)]
 struct Args {
@@ -72,7 +72,6 @@ struct Args {
     file: String,
 }
 
-
 fn configure_ppk2(args: &Args) -> Result<Ppk2> {
     let ppk2_port = match &args.serial_port {
         Some(p) => p,
@@ -87,7 +86,7 @@ fn configure_ppk2(args: &Args) -> Result<Ppk2> {
     Ok(ppk2)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 struct Sample {
     #[serde(rename = "timestamp (μs)")]
     timestamp: u128,
@@ -97,16 +96,15 @@ struct Sample {
     pins: LogicPortPins,
 }
 
-fn write_to_file(
-    ppk2: Ppk2,
-    args: &Args,
-    duration: Duration,
-) -> Result<Ppk2> {
-
+fn write_to_file(ppk2: Ppk2, args: &Args, duration: Duration) -> Result<Ppk2> {
     let mut wtr = csv::Writer::from_path(args.file.clone())?;
     let (rx, kill) = ppk2.start_measurement(args.sps)?;
 
-    info!("Started measurement of {} seconds to \'{:}\'", duration.as_secs(), args.file);
+    info!(
+        "Started measurement of {} seconds to \'{:}\'",
+        duration.as_secs(),
+        args.file
+    );
 
     let start = Instant::now();
 
@@ -115,7 +113,7 @@ fn write_to_file(
         if now > duration {
             break Ok(kill()?);
         }
-        
+
         use MeasurementMatch::*;
         match rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Match(m)) => {
@@ -137,9 +135,7 @@ fn write_to_file(
     }
 }
 
-fn wait_for_power(
-    ppk2: Ppk2,
-) -> Result<Ppk2> {
+fn wait_for_power(ppk2: Ppk2) -> Result<Ppk2> {
     let (rx, kill) = ppk2.start_measurement(100)?;
     info!("Waiting for power...");
 
@@ -148,8 +144,8 @@ fn wait_for_power(
         match rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Match(m)) if m.micro_amps > 0.0 => {
                 info!("Power detected!");
-                break Ok(kill()?)
-            },
+                break Ok(kill()?);
+            }
             Ok(_) => continue,
             Err(e) => {
                 error!("Error receiving data: {e:?}");
@@ -170,12 +166,8 @@ fn main() -> Result<()> {
     let mut ppk2 = configure_ppk2(args).expect("Something went wrong configuring the ppk2:\n");
 
     ppk2 = wait_for_power(ppk2).expect("Something went wrong waiting for power");
-    ppk2 = write_to_file(
-        ppk2,
-        args,
-        Duration::from_secs(5),
-    )
-    .expect("Something went wrong in measurement:\n");
+    ppk2 = write_to_file(ppk2, args, Duration::from_secs(5))
+        .expect("Something went wrong in measurement:\n");
 
     info!("Goodbye!");
     Ok(())
@@ -183,35 +175,41 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use ppk2::types::LogicPortPins;
-    use tracing::info;
     use crate::Sample;
+    use csv::{Reader, Writer};
+    use ppk2::types::LogicPortPins;
 
     #[test]
     pub fn dummy_data_test() {
+        let mut wtr = Writer::from_path("bar.csv").unwrap();
+        let pins0 = LogicPortPins::from(255 as u8);
+        let pins1 = pins0.set_level(0, ppk2::types::Level::Either);
+        let pins2 = pins0.set_level(7, ppk2::types::Level::Low);
 
-        let mut wtr = csv::Writer::from_path("bar.csv").unwrap();
-
-        let pins: LogicPortPins = LogicPortPins::from(87 as u8);
-
-        wtr.serialize(Sample {
-            timestamp: 0,
-            power: 1.2,
-            pins: pins,
-        }).unwrap();
-        let pins2 = pins.set_level(2,ppk2::types::Level::Either);
-        info!("{:?}", pins.inner());
-        wtr.serialize(Sample {
-            timestamp: 1,
-            power: 3.4,
-            pins: pins2,
-        }).unwrap();
-        wtr.serialize(Sample {
-            timestamp: 2,
-            power: 5.6,
-            pins: pins,
-        }).unwrap();
+        let samples: Vec<Sample> = vec![
+            Sample {
+                timestamp: 0,
+                power: 1.2,
+                pins: pins0,
+            },
+            Sample {
+                timestamp: 1,
+                power: 3.4,
+                pins: pins1,
+            },
+            Sample {
+                timestamp: 2,
+                power: 5.6,
+                pins: pins2,
+            },
+        ];
+        for sample in &samples {
+            wtr.serialize(sample).unwrap();
+        }
         wtr.flush().unwrap();
+
+        let mut rdr = Reader::from_path("bar.csv").unwrap();
+        let samples_cmp: Vec<Sample> = rdr.deserialize::<Sample>().map(|mx| mx.unwrap()).collect();
+        assert_eq!(samples, samples_cmp);
     }
 }
-

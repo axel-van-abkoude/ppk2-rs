@@ -4,6 +4,7 @@ use std::{fmt::Display, num::ParseIntError, str::FromStr};
 
 use crate::{Error, Result};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use serde::de::{Deserialize, Deserializer, Visitor};
 use serde::ser::{Serialize, Serializer};
 
 /// Error parsing one of the types defined by this crate.
@@ -138,7 +139,7 @@ impl FromStr for DevicePower {
 }
 
 /// Logic level for logic port pins
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum Level {
     /// Low level
     Low,
@@ -159,35 +160,134 @@ impl From<bool> for Level {
     }
 }
 
-// Serializer for low data footprint
+impl From<char> for Level {
+    fn from(level: char) -> Self {
+        use Level::*;
+        match level {
+            '0' => Low,
+            '1' => High,
+            _ => Either,
+        }
+    }
+}
+
+impl From<Level> for char {
+    fn from(level: Level) -> Self {
+        use Level::*;
+        match level {
+            Low => '0',
+            High => '1',
+            Either => 'x',
+        }
+    }
+}
+
+// ============== Serializer for low data footprint
 // impl Serialize for LogicPortPins {
-//     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok,S::Error>
+//     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
 //     where
 //         S: Serializer,
 //     {
 //         use Level::*;
-//         let mut ret:u8 = 0;
-//         for (i,pin) in self.pin_levels.iter().enumerate() {
+//         let mut ret: u8 = 0;
+//         for (i, pin) in self.pin_levels.iter().enumerate() {
 //             match pin {
-//                 Low     => {continue;       },
-//                 High    => {ret |= 1 << i;  },
+//                 Low => {
+//                     continue;
+//                 }
+//                 High => {
+//                     ret |= 1 << i;
+//                 }
 //                 // Display nothing when not sure which section we are in
-//                 Either  => {return serializer.serialize_none();},
+//                 Either => {
+//                     return serializer.serialize_none();
+//                 }
 //             }
 //         }
 //         serializer.serialize_u8(ret)
 //     }
 // }
+// struct LogicPortPinsVisitor;
+//
+// impl<'de> Visitor<'de> for LogicPortPinsVisitor {
+//     type Value = LogicPortPins;
+//
+//     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+//         formatter.write_str("an u8 representation of the logic port pins")
+//     }
+//
+//     fn visit_u8<E>(self, value: u8) -> std::result::Result<Self::Value, E>
+//     where
+//         E: serde::de::Error,
+//     {
+//         Ok(LogicPortPins::from(value))
+//     }
+//
+//     fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+//     where
+//         E: serde::de::Error,
+//     {
+//         Ok(LogicPortPins::default())
+//     }
+//
+//     fn visit_some<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+//     where
+//         D: Deserializer<'de>,
+//     {
+//         deserializer.deserialize_u8(self)
+//     }
+// }
+//
+// impl<'de> Deserialize<'de> for LogicPortPins {
+//     fn deserialize<D>(deserializer: D) -> std::result::Result<LogicPortPins, D::Error>
+//     where
+//         D: Deserializer<'de>,
+//     {
+//         deserializer.deserialize_option(LogicPortPinsVisitor)
+//     }
+// }
 
-// Serializer for clarity
+// ============ Serializer for clarity
 impl Serialize for LogicPortPins {
-     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok,S::Error>
-     where
-         S: Serializer,
-     {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(&self.to_string())
-     }
- }
+    }
+}
+
+impl<'de> Deserialize<'de> for LogicPortPins {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<LogicPortPins, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(LogicPortPinsVisitor)
+    }
+}
+
+struct LogicPortPinsVisitor;
+impl<'de> Visitor<'de> for LogicPortPinsVisitor {
+    type Value = LogicPortPins;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an string representation of the logic port pins (111100xx -> high high high high low low either either)")
+    }
+
+    fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        if v.as_bytes().len() != 8 {
+            return Err(E::custom("length of pins != 8"));
+        }
+        let mut arr = [Level::Either; 8];
+        for i in 0..8 {
+            arr[i] = Level::from(v.as_bytes()[i] as char);
+        }
+        Ok(LogicPortPins::with_levels(arr))
+    }
+}
 
 impl Level {
     /// Check whether the level is high.
@@ -213,7 +313,7 @@ impl Level {
 }
 
 /// Logic port state
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct LogicPortPins {
     pin_levels: [Level; 8],
 }
@@ -274,13 +374,7 @@ impl From<u32> for LogicPortPins {
 
 impl ToString for LogicPortPins {
     fn to_string(&self) -> String {
-        use Level::*;
-        self.pin_levels.iter()
-            .map(|p| match p {
-                Low => '0',
-                High => '1',
-                Either => 'x',
-            }).collect()
+        self.pin_levels.iter().map(|p| char::from(*p)).collect()
     }
 }
 

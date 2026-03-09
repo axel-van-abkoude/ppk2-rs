@@ -138,12 +138,12 @@ fn handle_keys(
                 *bound_bot -= STEP;
             }
             Key::A => {
-                *bound_right += STEP;
-                *bound_left -= STEP;
-            }
-            Key::D => {
                 *bound_right -= STEP;
                 *bound_left += STEP;
+            }
+            Key::D => {
+                *bound_right += STEP;
+                *bound_left -= STEP;
             }
             Key::S => {
                 *bound_top -= STEP;

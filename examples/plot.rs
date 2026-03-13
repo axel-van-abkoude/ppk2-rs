@@ -3,7 +3,6 @@ use clap::Parser;
 use csv::{Reader, Writer};
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use plotters::prelude::*;
-use plotters::{coord::ranged1d::AsRangedCoord, prelude::*};
 use plotters_bitmap::bitmap_pixel::BGRXPixel;
 use plotters_bitmap::BitMapBackend;
 use ppk2::{
@@ -14,10 +13,7 @@ use ppk2::{
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::{Borrow, BorrowMut};
-use std::collections::VecDeque;
 use std::error::Error;
-use std::thread;
-use std::time::SystemTime;
 use std::{
     sync::mpsc::RecvTimeoutError,
     time::{Duration, Instant},
@@ -84,7 +80,7 @@ struct Args {
 const W: usize = 1000;
 const H: usize = 800;
 const STEP: f32 = 1_000.0;
-const FPS: usize = 30;
+const FPS: usize = 100;
 
 #[derive(Clone)]
 struct BufferWrapper(Vec<u32>);
@@ -113,7 +109,7 @@ impl BorrowMut<[u32]> for BufferWrapper {
     }
 }
 
-fn handle_keys(
+fn update_bounds(
     keys: Vec<Key>,
     bound_right: &mut f32,
     bound_left: &mut f32,
@@ -160,6 +156,54 @@ fn handle_keys(
     }
 }
 
+fn draw_buffer(
+    args: &Args,
+    buf: &mut [u8],
+    bound_right: &mut f32,
+    bound_left: &mut f32,
+    bound_top: &mut f32,
+    bound_bot: &mut f32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = BitMapBackend::<BGRXPixel>::with_buffer_and_format(buf, (W as u32, H as u32))?
+        .into_drawing_area();
+
+    root.fill(&BLACK)?;
+
+    let mut chart = ChartBuilder::on(&root)
+        .margin(10)
+        .set_all_label_area_size(30)
+        .build_cartesian_2d(-*bound_left..*bound_right, -*bound_bot..*bound_top)?;
+
+    chart
+        .configure_mesh()
+        .label_style(("sans-serif", 15).into_font().color(&GREEN))
+        .axis_style(&GREEN)
+        .draw()?;
+
+    chart
+        .configure_mesh()
+        .bold_line_style(&GREEN.mix(0.2))
+        .light_line_style(&TRANSPARENT)
+        .draw()?;
+
+    let mut rdr = Reader::from_path(args.file.clone()).unwrap();
+    chart
+        .draw_series(LineSeries::new(
+            rdr.deserialize::<Sample>().map(|xs| match xs {
+                Ok(s) => (s.timestamp, s.power),
+                Err(_) => {
+                    todo!()
+                }
+            }),
+            &GREEN,
+        ))
+        .unwrap()
+        .label("trace")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
+    chart.plotting_area().present()?;
+    Ok(())
+}
+
 fn start_plot(args: &Args) -> Result<(), Box<dyn Error>> {
     let mut buf = BufferWrapper(vec![0u32; W * H]);
 
@@ -170,60 +214,40 @@ fn start_plot(args: &Args) -> Result<(), Box<dyn Error>> {
 
     let mut window = Window::new("Title", W, H, WindowOptions::default())?;
     window.set_target_fps(FPS);
+
+    draw_buffer(
+        args,
+        buf.borrow_mut(),
+        &mut bound_right,
+        &mut bound_left,
+        &mut bound_top,
+        &mut bound_bot,
+    )?;
     window.update_with_buffer(buf.borrow(), W, H)?;
 
-    while window.is_open() && !window.is_key_down(Key::Escape){
-
+    while window.is_open() && !window.is_key_pressed(Key::Escape, KeyRepeat::No) {
         window.update_with_buffer(buf.borrow(), W, H)?;
         let keys = window.get_keys_pressed(KeyRepeat::Yes);
         if keys.is_empty() {
             continue;
         }
 
-        handle_keys(keys, &mut bound_right, &mut bound_left, &mut bound_top, &mut bound_bot);
+        update_bounds(
+            keys,
+            &mut bound_right,
+            &mut bound_left,
+            &mut bound_top,
+            &mut bound_bot,
+        );
 
-        {
-            let root = BitMapBackend::<BGRXPixel>::with_buffer_and_format(
-                buf.borrow_mut(),
-                (W as u32, H as u32),
-            )?
-            .into_drawing_area();
-
-            root.fill(&BLACK)?;
-
-            let mut chart = ChartBuilder::on(&root)
-                .margin(10)
-                .set_all_label_area_size(30)
-                .build_cartesian_2d(-bound_left..bound_right, -bound_bot..bound_top)?;
-
-            chart
-                .configure_mesh()
-                .label_style(("sans-serif", 15).into_font().color(&GREEN))
-                .axis_style(&GREEN)
-                .draw()?;
-
-            chart
-                .configure_mesh()
-                .bold_line_style(&GREEN.mix(0.2))
-                .light_line_style(&TRANSPARENT)
-                .draw()?;
-
-            let mut rdr = Reader::from_path(args.file.clone()).unwrap();
-            chart
-                .draw_series(LineSeries::new(
-                    rdr.deserialize::<Sample>().map(|xs| match xs {
-                        Ok(s) => (s.timestamp, s.power),
-                        Err(_) => {
-                            todo!()
-                        }
-                    }),
-                    &GREEN,
-                ))
-                .unwrap()
-                .label("trace")
-                .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
-            chart.plotting_area().present()?;
-        }
+        draw_buffer(
+            args,
+            buf.borrow_mut(),
+            &mut bound_right,
+            &mut bound_left,
+            &mut bound_top,
+            &mut bound_bot,
+        )?;
     }
     Ok(())
 }

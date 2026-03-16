@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::{Borrow, BorrowMut};
 use std::error::Error;
 use std::{
+    path::Path,
     sync::mpsc::RecvTimeoutError,
     time::{Duration, Instant},
 };
@@ -79,8 +80,115 @@ struct Args {
 
 const W: usize = 1000;
 const H: usize = 800;
-const STEP: f32 = 1_000.0;
-const FPS: usize = 100;
+const FPS: usize = 200;
+// Move with 1/SCALE of distance in plot
+const SCALE: f32 = 10.0;
+
+struct PlotBounds {
+    right: f32,
+    left: f32,
+    top: f32,
+    bot: f32,
+    max_right: f32,
+    min_left: f32,
+    max_top: f32,
+    min_bot: f32,
+}
+
+impl PlotBounds {
+
+    /// Infer values of PlotBound from csv file
+    pub fn from_file<T: AsRef<Path>>(file: T) -> Result<PlotBounds> {
+        let mut max_right = f32::MIN;
+        let mut min_left = f32::MAX;
+        let mut max_top = f32::MIN;
+        let mut min_bot = f32::MAX;
+
+        let mut rdr = Reader::from_path(file).unwrap();
+        for msample in rdr.deserialize::<Sample>() {
+            let sample = msample?;
+            // Update max and min timestamp
+            if sample.timestamp > max_right {
+                max_right = sample.timestamp;
+            }
+            if sample.timestamp < min_left {
+                min_left = sample.timestamp;
+            }
+            // Update max and min power
+            if sample.power > max_top {
+                max_top = sample.power;
+            }
+            if sample.power < min_bot {
+                min_bot = sample.power;
+            }
+        }
+        let margin = max_right/SCALE;
+        Ok(PlotBounds {
+            right: max_right,
+            left: min_left,
+            top: max_top,
+            bot: min_bot,
+            max_right: max_right+margin,
+            min_left: min_left-margin,
+            max_top: max_top+margin,
+            min_bot: min_bot-margin,
+        })
+    }
+
+    fn zoom_out(&mut self) {
+        let scalex = (self.right - self.left) / SCALE;
+        let scaley = (self.top - self.bot) / SCALE;
+        self.right += scalex;
+        self.left -= scalex;
+        // self.top += scaley;
+        // self.bot -= scaley;
+    }
+
+    fn zoom_in(&mut self) {
+        let scalex = (self.right - self.left) / SCALE;
+        let scaley = (self.top - self.bot) / SCALE;
+        self.right -= scalex;
+        self.left += scalex;
+        // self.top -= scaley;
+        // self.bot += scaley;
+    }
+
+    fn move_right(&mut self) {
+        let scale = (self.right - self.left) / SCALE;
+        let ret = self.right + scale;
+        if ret < self.max_right {
+            self.right = ret;
+            self.left = self.left + scale;
+        }
+    }
+
+    fn move_left(&mut self) {
+        let scale = (self.right - self.left) / SCALE;
+        let ret = self.left - scale;
+        if ret > self.min_left {
+            self.left = ret;
+            self.right = self.right - scale;
+        }
+    }
+
+    fn move_up(&mut self) {
+        let scale = (self.top - self.bot) / SCALE;
+        let ret = self.top + scale;
+        if ret < self.max_top {
+            self.top = ret;
+            self.bot = self.bot + scale;
+        }
+    }
+
+    fn move_down(&mut self) {
+        let scale = (self.top - self.bot) / SCALE;
+        let ret = self.bot - scale;
+        if ret > self.min_bot {
+            self.bot = ret;
+            self.top = self.top - scale;
+        }
+    }
+}
 
 #[derive(Clone)]
 struct BufferWrapper(Vec<u32>);
@@ -109,49 +217,16 @@ impl BorrowMut<[u32]> for BufferWrapper {
     }
 }
 
-fn update_bounds(
-    keys: Vec<Key>,
-    bound_right: &mut f32,
-    bound_left: &mut f32,
-    bound_top: &mut f32,
-    bound_bot: &mut f32,
-) {
+fn update_bounds(keys: Vec<Key>, bound: &mut PlotBounds) {
     for key in keys {
         match key {
-            Key::Escape => {
-                break;
-            }
-            Key::Minus => {
-                *bound_right += STEP;
-                *bound_left += STEP;
-                *bound_top += STEP;
-                *bound_bot += STEP;
-            }
-            Key::Equal => {
-                *bound_right -= STEP;
-                *bound_left -= STEP;
-                *bound_top -= STEP;
-                *bound_bot -= STEP;
-            }
-            Key::A => {
-                *bound_right -= STEP;
-                *bound_left += STEP;
-            }
-            Key::D => {
-                *bound_right += STEP;
-                *bound_left -= STEP;
-            }
-            Key::S => {
-                *bound_top -= STEP;
-                *bound_bot += STEP;
-            }
-            Key::W => {
-                *bound_top += STEP;
-                *bound_bot -= STEP;
-            }
-            _ => {
-                continue;
-            }
+            Key::Minus => bound.zoom_out(),
+            Key::Equal => bound.zoom_in(),
+            Key::W | Key::Up => bound.move_up(),
+            Key::A | Key::Left => bound.move_left(),
+            Key::S | Key::Down => bound.move_down(),
+            Key::D | Key::Right => bound.move_right(),
+            _ => continue,
         }
     }
 }
@@ -159,10 +234,7 @@ fn update_bounds(
 fn draw_buffer(
     args: &Args,
     buf: &mut [u8],
-    bound_right: &mut f32,
-    bound_left: &mut f32,
-    bound_top: &mut f32,
-    bound_bot: &mut f32,
+    bound: &mut PlotBounds,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::<BGRXPixel>::with_buffer_and_format(buf, (W as u32, H as u32))?
         .into_drawing_area();
@@ -172,17 +244,17 @@ fn draw_buffer(
     let mut chart = ChartBuilder::on(&root)
         .margin(10)
         .set_all_label_area_size(30)
-        .build_cartesian_2d(-*bound_left..*bound_right, -*bound_bot..*bound_top)?;
+        .build_cartesian_2d((*bound).left..(*bound).right, (*bound).bot..(*bound).top)?;
 
     chart
         .configure_mesh()
-        .label_style(("sans-serif", 15).into_font().color(&GREEN))
-        .axis_style(&GREEN)
+        .label_style(("sans-serif", 15).into_font().color(&WHITE))
+        .axis_style(&WHITE)
         .draw()?;
 
     chart
         .configure_mesh()
-        .bold_line_style(&GREEN.mix(0.2))
+        .bold_line_style(&WHITE.mix(0.2))
         .light_line_style(&TRANSPARENT)
         .draw()?;
 
@@ -199,7 +271,7 @@ fn draw_buffer(
         ))
         .unwrap()
         .label("trace")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &GREEN));
     chart.plotting_area().present()?;
     Ok(())
 }
@@ -207,22 +279,12 @@ fn draw_buffer(
 fn start_plot(args: &Args) -> Result<(), Box<dyn Error>> {
     let mut buf = BufferWrapper(vec![0u32; W * H]);
 
-    let mut bound_right: f32 = 100_000.0;
-    let mut bound_left: f32 = 0.0;
-    let mut bound_top: f32 = 1_000.0;
-    let mut bound_bot: f32 = 0.0;
+    let mut bound = PlotBounds::from_file(args.file.clone())?;
 
     let mut window = Window::new("Title", W, H, WindowOptions::default())?;
     window.set_target_fps(FPS);
 
-    draw_buffer(
-        args,
-        buf.borrow_mut(),
-        &mut bound_right,
-        &mut bound_left,
-        &mut bound_top,
-        &mut bound_bot,
-    )?;
+    draw_buffer(args, buf.borrow_mut(), &mut bound)?;
     window.update_with_buffer(buf.borrow(), W, H)?;
 
     while window.is_open() && !window.is_key_pressed(Key::Escape, KeyRepeat::No) {
@@ -232,22 +294,9 @@ fn start_plot(args: &Args) -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        update_bounds(
-            keys,
-            &mut bound_right,
-            &mut bound_left,
-            &mut bound_top,
-            &mut bound_bot,
-        );
+        update_bounds(keys, &mut bound);
 
-        draw_buffer(
-            args,
-            buf.borrow_mut(),
-            &mut bound_right,
-            &mut bound_left,
-            &mut bound_top,
-            &mut bound_bot,
-        )?;
+        draw_buffer(args, buf.borrow_mut(), &mut bound)?;
     }
     Ok(())
 }
